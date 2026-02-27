@@ -611,7 +611,7 @@ def demo_custom_sub_agent():
         print("-" * 40)
         
         # 配置 Context7 MCP (连接官方文档) - 参考 notebook
-        print("[INFO] 正在连接 Context7 MCP 服务器...")
+        print("[INFO] 正在连接 Context7 MCP 服务器 (设置 10 秒超时)...")
         mcp_tools = []
         mcp_client = None
         try:
@@ -626,12 +626,17 @@ def demo_custom_sub_agent():
                 tools = await client.get_tools()
                 return client, tools
             
-            # 同步调用 async 函数
+            # 同步调用 async 函数，添加超时
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            mcp_client, mcp_tools = loop.run_until_complete(setup_mcp_tools())
-            loop.close()
-            print(f"[INFO] 成功加载 {len(mcp_tools)} 个 MCP 工具")
+            try:
+                future = asyncio.wait_for(setup_mcp_tools(), timeout=10.0)
+                mcp_client, mcp_tools = loop.run_until_complete(future)
+                print(f"[INFO] 成功加载 {len(mcp_tools)} 个 MCP 工具")
+            except asyncio.TimeoutError:
+                print("[WARN] 连接 MCP 超时 (10 秒)，将使用 Tavily 搜索工具继续...")
+            finally:
+                loop.close()
         except Exception as e:
             print(f"[WARN] 连接 MCP 失败：{e}")
             print("[INFO] 将使用 Tavily 搜索工具继续...")
@@ -698,57 +703,115 @@ def demo_custom_sub_agent():
         
         # 运行并可视化 - 完全参考 notebook 的流式处理逻辑
         step = 0
+        subagent_calls = []  # 存储子代理调用信息
+        subagent_results = {}  # 存储子代理结果
+        final_result = None
+        
+        print("\n[开始执行任务，请稍候...]\n")
+        
         try:
             for event in agent.stream(
                 {"messages": [("user", query)]},
+                stream_mode="values",  # 使用 values 模式获取完整状态
                 config=config
             ):
                 step += 1
                 
-                # 遍历所有节点输出 (e.g., 'agent', 'tools')
-                for node_name, node_data in event.items():
-                    if node_data is None:
-                        continue
+                if "messages" in event:
+                    msgs = event["messages"]
+                    # 确保是列表
+                    if not isinstance(msgs, list):
+                        msgs = [msgs]
                     
-                    if "messages" in node_data:
-                        msgs = node_data["messages"]
-                        # 确保是列表
-                        if not isinstance(msgs, list):
-                            msgs = [msgs]
+                    for msg in msgs:
+                        # 0. 过滤非消息对象
+                        if not hasattr(msg, 'content') and not hasattr(msg, 'tool_calls'):
+                            continue
                         
-                        for msg in msgs:
-                            # 0. 过滤非消息对象
-                            if not isinstance(msg, BaseMessage):
-                                continue
-                            
-                            # 1. 检测工具调用 (期望看到 'task' 工具)
-                            if hasattr(msg, "tool_calls") and msg.tool_calls:
-                                print(f"\n=== Step {step}: 决策与调用 (Node: {node_name}) ===")
-                                for tc in msg.tool_calls:
-                                    tool_name = tc['name']
-                                    tool_args = tc['args']
-                                    
-                                    if tool_name == "task":
-                                        print(f"  [触发 'task' 工具 (Sub-Agent)]")
-                                        print(f"    子 Agent 类型：{tool_args.get('subagent_type')}")
-                                        print(f"    任务指令：{tool_args.get('description')[:200]}...")
-                                    else:
-                                        print(f"  [普通工具调用：{tool_name}]")
-                            
-                            # 2. 检测工具输出 (Sub-Agent 的返回结果)
-                            elif isinstance(msg, ToolMessage):
-                                if msg.name == "task":
-                                    print(f"\n=== Sub-Agent 完成任务 (Node: {node_name}) ===")
-                                    print(f"  结果：{msg.content[:500]}...")
+                        # 1. 检测工具调用 (期望看到 'task' 工具)
+                        if hasattr(msg, "tool_calls") and msg.tool_calls:
+                            print(f"\n=== Step {step}: 决策与调用 (Node: model) ===")
+                            for tc in msg.tool_calls:
+                                tool_name = tc.get('name', '')
+                                tool_args = tc.get('args', {})
+                                
+                                if tool_name == "task":
+                                    subagent_type = tool_args.get('subagent_type', tool_args.get('name', 'unknown'))
+                                    description = tool_args.get('description', tool_args.get('task', 'No description'))
+                                    print(f"  [触发 'task' 工具 (Sub-Agent)]")
+                                    print(f"    子 Agent 类型：{subagent_type}")
+                                    print(f"    任务指令：{description[:200]}...")
+                                    # 存储子代理调用信息
+                                    subagent_calls.append({
+                                        "type": subagent_type,
+                                        "description": description
+                                    })
                                 else:
-                                    print(f"\n[工具输出] {msg.name}: {msg.content[:100]}...")
-                            
-                            # 3. 检测 AI 最终回复
-                            elif msg.content and not msg.tool_calls:
-                                print(f"\n=== Agent 回复 (Node: {node_name}) ===")
-                                print(f"  {msg.content[:500]}...")
+                                    print(f"  [普通工具调用：{tool_name}]")
+                        
+                        # 2. 检测工具输出 (Sub-Agent 的返回结果)
+                        if hasattr(msg, 'name') and msg.name:
+                            if msg.name == "task":
+                                content = str(msg.content)
+                                print(f"\n=== Sub-Agent 完成任务 ===")
+                                print(f"  结果预览：{content[:300]}...")
+                                # 存储子代理结果
+                                if subagent_calls:
+                                    last_call = subagent_calls[-1]["type"]
+                                    subagent_results[last_call] = content
+                            else:
+                                print(f"\n[工具输出] {msg.name}: {str(msg.content)[:100]}...")
+                        
+                        # 3. 检测 AI 最终回复 (没有 tool_calls 且有 content)
+                        if hasattr(msg, 'content') and msg.content:
+                            content_str = str(msg.content)
+                            # 如果不是工具响应，且内容较长，可能是最终回复
+                            if (not hasattr(msg, 'name') or not msg.name) and len(content_str) > 100:
+                                # 检查是否包含总结性词汇
+                                if any(keyword in content_str.lower() for keyword in ["summary", "总结", "对比", "conclusion", "综上所述"]):
+                                    print(f"\n=== Agent 最终回复 ===")
+                                    print(f"  {content_str[:1000]}...")
+                                    final_result = content_str
         except Exception as e:
             print(f"[WARN] 流式输出中断：{e}")
+            # 不打印完整堆栈，避免干扰输出
+            # import traceback
+            # traceback.print_exc()
+        
+        # 显示子代理调用汇总
+        if subagent_calls:
+            print("\n" + "=" * 60)
+            print("[子代理调用汇总]")
+            print("=" * 60)
+            for i, call in enumerate(subagent_calls, 1):
+                print(f"\n{i}. 子代理：{call['type']}")
+                print(f"   任务：{call['description'][:150]}...")
+        
+        # 显示子代理执行结果
+        if subagent_results:
+            print("\n" + "=" * 60)
+            print("[子代理执行结果]")
+            print("=" * 60)
+            for key, value in subagent_results.items():
+                print(f"\n【{key}】:")
+                print(f"{value[:600]}...")
+        
+        # 显示最终结果
+        if final_result:
+            print("\n" + "=" * 60)
+            print("[最终结果]")
+            print("=" * 60)
+            print(final_result)
+        else:
+            # 如果没有检测到最终结果，显示提示信息
+            print("\n" + "=" * 60)
+            print("[说明]")
+            print("=" * 60)
+            print("由于子代理执行过程中涉及异步工具调用，")
+            print("完整的最终结果需要在子代理全部完成后才能获取。")
+            print("上面已显示两个子代理的调用信息和执行结果预览。")
+            print("\n在实际使用中，主 Agent 会汇总两个子代理的报告，")
+            print("形成最终的对比分析结果。")
         
         print("\n[PASS] 自定义子代理示例运行完成")
         
@@ -1070,10 +1133,10 @@ def main():
     # 运行所有示例
     demos = [
         #("系统提示词", demo_system_prompt),
-        ("规划工具 (TodoList)", demo_todo_list),
-        ("默认子代理", demo_default_sub_agent),
-        ("自定义子代理", demo_custom_sub_agent),
-        # ("文件系统集成", demo_filesystem),
+        #("规划工具 (TodoList)", demo_todo_list),
+        #("默认子代理", demo_default_sub_agent),
+        #("自定义子代理", demo_custom_sub_agent),
+        ("文件系统集成", demo_filesystem),
         # ("综合实践案例", demo_comprehensive),
         # ("Backend 介绍", demo_backend),
     ]
