@@ -8,7 +8,8 @@ alwaysApply: true
 当需要执行 Python 脚本时，必须使用以下 Python 解释器：
 
 ```
-D:\sorfware_install\python3.8_install\envs\deepagent_1\python
+D:\sorfware_install\python3.8_install\envs\deepagent_1\python【windows】
+/home/ubuntu/miniconda/envs/deepagent_1/bin/python【linux】
 ```
 
 ## 执行方式
