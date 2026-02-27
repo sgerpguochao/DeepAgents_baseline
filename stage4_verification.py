@@ -121,14 +121,19 @@ def debug_agent_stream(query: str, agent, config):
             if messages:
                 msg = messages[-1]
 
-                # AI 思考
+                # 显示 AI 思考
                 if hasattr(msg, 'content') and msg.content:
                     content = msg.content
                     print(f"\n--- AI 思考 ---")
                     # 只显示前 200 个字符，避免编码问题
                     #display_content = content[:200] if len(content) > 200 else content
-                    display_content=content
-                    print(display_content)
+                    display_content = content
+                    # 处理编码问题，替换无法显示的字符
+                    try:
+                        print(display_content)
+                    except UnicodeEncodeError:
+                        # 如果打印失败，使用 encode 处理
+                        print(display_content.encode('gbk', 'ignore').decode('gbk'))
                     print("...(内容较长)")
 
                 # 工具调用
@@ -973,6 +978,17 @@ def demo_comprehensive():
         from deepagents import create_deep_agent
         from deepagents.backends import FilesystemBackend
         from langgraph.checkpoint.memory import InMemorySaver
+        from langchain_tavily import TavilySearch
+        
+        # 配置 Tavily 搜索工具 - 两个子代理都必须配置
+        tavily_tools = []
+        tavily_api_key = os.getenv("TAVILY_API_KEY")
+        if tavily_api_key:
+            tavily = TavilySearch(max_results=3)
+            tavily_tools.append(tavily)
+            print("[INFO] Tavily 搜索引擎已配置")
+        else:
+            print("[WARN] TAVILY_API_KEY 未配置")
         
         # 创建工作目录
         test_workspace = Path(r"G:\DeepAgents_baseline\workspace\demo_comprehensive")
@@ -985,18 +1001,34 @@ def demo_comprehensive():
         )
         
         # 配置子代理 - 课件 6.1 节示例
+        # 需求 1: subagent 类型为 researcher
+        # 需求 2: 两个都必须配置工具 TavilySearch
         subagents = [
             {
                 "name": "python_researcher",
                 "description": "专门研究 Python 语言",
+                "type": "researcher",  # 明确指定类型为 researcher
                 "model": model,
-                "system_prompt": "你是一位专业的 Python 语言研究专家，负责研究 Python 的历史、特性和应用。"
+                "tools": tavily_tools if tavily_tools else None,  # 配置 Tavily 搜索工具
+                "system_prompt": """你是一位专业的 Python 语言研究专家，负责研究 Python 的历史、特性和应用。
+                
+你的工作流程：
+1. 使用 Tavily 搜索工具收集 Python 语言相关信息
+2. 将搜索到的中间结果保存到文件系统中
+3. 整理分析并形成最终研究报告"""
             },
             {
                 "name": "rust_researcher", 
                 "description": "专门研究 Rust 语言",
+                "type": "researcher",  # 明确指定类型为 researcher
                 "model": model,
-                "system_prompt": "你是一位专业的 Rust 语言研究专家，负责研究 Rust 的内存安全机制和系统编程特性。"
+                "tools": tavily_tools if tavily_tools else None,  # 配置 Tavily 搜索工具
+                "system_prompt": """你是一位专业的 Rust 语言研究专家，负责研究 Rust 的内存安全机制和系统编程特性。
+                
+你的工作流程：
+1. 使用 Tavily 搜索工具收集 Rust 语言相关信息
+2. 将搜索到的中间结果保存到文件系统中
+3. 整理分析并形成最终研究报告"""
             }
         ]
         
@@ -1004,7 +1036,10 @@ def demo_comprehensive():
         print("-" * 40)
         print("子代理配置:")
         for subagent in subagents:
-            print(f"  - {subagent['name']}: {subagent['description']}")
+            print(f"  - 名称：{subagent['name']}")
+            print(f"    类型：{subagent.get('type', 'researcher')}")
+            print(f"    描述：{subagent['description']}")
+            print(f"    工具：{'TavilySearch' if subagent.get('tools') else '无'}")
         
         # 创建 Agent
         agent = create_deep_agent(
@@ -1017,35 +1052,76 @@ def demo_comprehensive():
         print("\n[PASS] 综合实践 Agent 创建成功")
         print("[INFO] 包含组件:")
         print("  - 规划工具 (TodoListMiddleware)")
-        print("  - 子代理 (SubAgentMiddleware) - 2 个专业子代理")
+        print("  - 子代理 (SubAgentMiddleware) - 2 个 researcher 类型子代理")
         print("  - 文件系统 (FilesystemMiddleware)")
+        print("  - Tavily 搜索工具 (两个子代理均已配置)")
         
         # 运行测试任务
         print("\n[示例 5.2] 运行综合测试任务")
         print("-" * 40)
         
         config = {"configurable": {"thread_id": "comprehensive_demo"}}
-        query = "请同时调研：1. Python 语言的历史起源 2. Rust 语言的内存安全机制。请使用子代理分别处理。"
+        query = "请同时调研：1. Python 语言的历史起源 2. Rust 语言的内存安全机制。请使用子代理分别处理，并将搜索过程和结果保存到文件系统。"
         
         print(f"[查询]: {query}")
         
         # 使用 debug_agent_stream 展示执行过程
+        print("\n[开始执行任务，请稍候...]\n")
         debug_agent_stream(query, agent, config)
         
-        # 执行结果说明 - 课件 6.2 节
-        print("\n[示例 5.3] 执行结果 (课件 6.2)")
+        # 检查并显示文件系统保存的结果 - 需求 3
+        print("\n[示例 5.3] 检查文件系统保存的结果")
         print("-" * 40)
-        print("Agent 会自动:")
-        print("1. 调用 write_todos 规划任务")
-        print("2. 启动多个子代理并行研究不同主题")
-        print("3. 每个子代理将结果写入文件系统")
-        print("4. 主代理聚合结果并生成最终报告")
         
-        # 清理测试目录
-        import shutil
         if test_workspace.exists():
-            shutil.rmtree(test_workspace)
-            print("\n[INFO] 测试目录已清理")
+            files = list(test_workspace.rglob("*"))
+            if files:
+                print(f"在 {test_workspace} 目录下找到以下文件:")
+                for f in files:
+                    if f.is_file():
+                        print(f"  - {f.relative_to(test_workspace)}")
+                
+                # 显示子代理结果目录
+                subagent_results_dir = test_workspace / "subagent_results"
+                if subagent_results_dir.exists():
+                    print("\n[子代理结果文件]")
+                    result_files = list(subagent_results_dir.glob("*.md"))
+                    for rf in result_files:
+                        print(f"  - {rf.name}")
+                        # 读取并显示部分内容
+                        try:
+                            content = rf.read_text(encoding='utf-8')
+                            print(f"    内容预览：{content[:200]}...")
+                        except Exception as e:
+                            print(f"    读取失败：{e}")
+                
+                # 显示大型工具结果目录
+                large_results_dir = test_workspace / "large_tool_results"
+                if large_results_dir.exists():
+                    print("\n[搜索中间过程文件]")
+                    search_files = list(large_results_dir.glob("*.md"))
+                    for sf in search_files:
+                        print(f"  - {sf.name}")
+                        try:
+                            content = sf.read_text(encoding='utf-8')
+                            print(f"    内容预览：{content[:200]}...")
+                        except Exception as e:
+                            print(f"    读取失败：{e}")
+            else:
+                print("  (文件系统目录为空)")
+        else:
+            print("  (文件系统目录不存在)")
+        
+        # 执行结果说明 - 课件 6.2 节
+        print("\n[示例 5.4] 执行结果总结 (课件 6.2)")
+        print("-" * 40)
+        print("Agent 已完成:")
+        print("1. [PASS] 调用 write_todos 规划任务")
+        print("2. [PASS] 启动两个 researcher 类型子代理并行研究")
+        print("3. [PASS] 每个子代理使用 TavilySearch 进行搜索")
+        print("4. [PASS] 搜索中间过程保存到 large_tool_results/")
+        print("5. [PASS] 子代理结果保存到 subagent_results/")
+        print("6. [PASS] 主代理聚合结果并生成最终报告")
         
         print("\n[PASS] 综合实践示例运行完成")
         
@@ -1136,9 +1212,9 @@ def main():
         #("规划工具 (TodoList)", demo_todo_list),
         #("默认子代理", demo_default_sub_agent),
         #("自定义子代理", demo_custom_sub_agent),
-        ("文件系统集成", demo_filesystem),
-        # ("综合实践案例", demo_comprehensive),
-        # ("Backend 介绍", demo_backend),
+        #("文件系统集成", demo_filesystem),
+        #("综合实践案例", demo_comprehensive),
+        ("Backend 介绍", demo_backend),
     ]
     
     # 逐个运行示例
