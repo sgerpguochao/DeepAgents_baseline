@@ -1,0 +1,18 @@
+---
+description: 执行Python脚本时使用指定的虚拟环境
+alwaysApply: true
+---
+
+# Python 虚拟环境配置
+
+当需要执行 Python 脚本时，必须使用以下 Python 解释器：
+
+```
+D:\sorfware_install\python3.8_install\envs\deepagent_1\python
+```
+
+## 执行方式
+
+- 使用 Shell 工具执行 Python 脚本时，必须使用完整路径指定该 Python 解释器
+- 示例：`D:\sorfware_install\python3.8_install\envs\deepagent_1\python script.py`
+- 不要使用系统默认的 python 命令
