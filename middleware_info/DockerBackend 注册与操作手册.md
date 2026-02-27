@@ -690,10 +690,29 @@ backend = DockerBackend(
 
 ### 6.4 卷挂载
 
+#### 6.4.1 自动挂载（推荐）
+
+默认情况下，DockerBackend 会自动将项目根目录下的 `./workspace` 文件夹挂载到容器的 `/workspace` 目录。这样容器内创建的文件会自动同步到宿主机的 `./workspace` 目录。
+
+```python
+# 默认配置，自动挂载 ./workspace -> /workspace
+backend = DockerBackend()  # 等价于 mount_workspace=True
+```
+
+如果不需要挂载，可以禁用：
+
+```python
+# 禁用自动挂载，容器内文件不同步到宿主机
+backend = DockerBackend(mount_workspace=False)
+```
+
+#### 6.4.2 手动挂载
+
 ```python
 # 挂载单个目录
 backend = DockerBackend(
-    image="python:3.11-slim",
+    image="python:3.12-slim",
+    mount_workspace=False,  # 禁用自动挂载
     volumes={"./workspace": {"bind": "/workspace", "mode": "rw"}}
 )
 
